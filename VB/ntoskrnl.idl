@@ -1,0 +1,48 @@
+[uuid(73818A3E-6587-4539-9E3A-76204EE58FA2)]
+library VBHWldDriverTLB
+{
+	[dllname("ntoskrnl.exe")] 
+	module ntoskrnl
+	{ 
+    		[entry("IoCreateDevice")]int IoCreateDevice
+														(void	*DriverObject, 
+														int		DeviceExtensionSize,
+														void	*DeviceName,
+														int		DeviceType,
+														int		DeviceCharacteristics,
+														int		Exclusive,
+														void	*DeviceObject);
+
+    		[entry("IoCreateSymbolicLink")]int IoCreateSymbolicLink
+														(void	*SymbolicLinkName, 
+														void	*DeviceName);
+
+    		[entry("IoDeleteDevice")]void IoDeleteDevice
+														(void	*DeviceObject);
+
+    		[entry("IoDeleteSymbolicLink")]int IoDeleteSymbolicLink
+														(void	*SymbolicLinkName);
+
+    		[entry("IoCompleteRequest")]void IoCompleteRequest
+														(void	*pIrp, 
+														unsigned char	PriorityBoost);
+
+    		[entry("RtlInitUnicodeString")]int RtlInitUnicodeString
+														(void	*UnicodeString, 
+														void	*StringPtr);
+
+    		[entry("RtlMoveMemory")]void CopyMemory
+														(void	*Destination, 
+														void	*Source,
+														int		Length);
+
+
+    		[entry("DbgPrint")]int __cdecl DbgPrint
+														([in] long Fmt);
+
+			[entry("InterlockedExchange")] int InterlockedExchange
+														(void* Target,
+															void* Value);
+	}
+
+}
