@@ -8,9 +8,12 @@ For testing purposes, I made a working VB6 version, a tB version with near-ident
 To use the project, 
 
 *Build binaries, if not using release*
+For the VB version:
 1) The VBP includes the undocumented link switches and enables the optimizations needed, so just needs to be opened and compiled.
 2) After compiling the .sys, use The_trick's Patcher project (included) to strip the msvbvm60.dll dependency from the .sys.
 3) Build, for win32, the HelloWorldDriverController twinBASIC project. This is used to load both the VB6 version, and hopefully one day soon, the tB version.
+
+The tB version only needs to be built. The required settings applied for making kernel mode drivers were creating a standard exe, removing the current references, enabling the settings Project: Native subsystem->YES, Project: Override entry point->DriverEntry, Project: Runtime binding of DLL declares->NO.
 
 *Running the driver*
 1) First, you need an x86 version of Windows. You can set one up in VirtualBox or other VM software. I've been testing on Windows 7, since it's less anal about unsigned drivers.
@@ -24,4 +27,4 @@ Then restart. This will bring up the Advanced Boot Options menu, containing "Dis
 7) If it successfully loads and connects (there's a log that will tell you), you can send the version command to get a response back from the driver.
 8) When done, click Unload and delete. This will remove the service created to load the driver. Then Exit.
 
-Current step 6 fails for the tB version with 'ERROR_INVALID_EXE', meaning it's not a valid Win32 program. Wayne is looking into this. But the VB version is working.
+Currently, with the tB version, step 6 will fail with invalid exe if you use the included binary, or if you rebuild with the latest tB your OS will blue screen with an access violation.  Wayne is looking into this. But the VB version is working.
