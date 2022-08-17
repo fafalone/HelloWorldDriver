@@ -1,0 +1,71 @@
+kd> u TBHWldDrv + 0x2719
+TBHWldDrv+0x2719:
+8bfe5719 8b6c8d00        mov     ebp,dword ptr [ebp+ecx*4]
+8bfe571d 33c0            xor     eax,eax
+8bfe571f 40              inc     eax
+8bfe5720 f00fc14510      lock xadd dword ptr [ebp+10h],eax
+8bfe5725 50              push    eax
+8bfe5726 680070fe8b      push    offset TBHWldDrv+0x4000 (8bfe7000)
+8bfe572b 6a00            push    0
+8bfe572d 6a00            push    0
+
+
+
+Disassembly window section:
+8bfe56d2 0f1f00          nop     dword ptr [eax]
+8bfe56d5 ff742450        push    dword ptr [esp+50h]
+8bfe56d9 8b0424          mov     eax,dword ptr [esp]
+8bfe56dc 8d642404        lea     esp,[esp+4]
+8bfe56e0 59              pop     ecx
+8bfe56e1 894d00          mov     dword ptr [ebp],ecx
+8bfe56e4 59              pop     ecx
+8bfe56e5 894d24          mov     dword ptr [ebp+24h],ecx
+8bfe56e8 83c44c          add     esp,4Ch
+8bfe56eb 5d              pop     ebp
+8bfe56ec 5b              pop     ebx
+8bfe56ed 5e              pop     esi
+8bfe56ee c20400          ret     4
+8bfe56f1 56              push    esi
+8bfe56f2 53              push    ebx
+8bfe56f3 55              push    ebp
+8bfe56f4 d92d1062fe8b    fldcw   word ptr [TBHWldDrv+0x3210 (8bfe6210)]
+8bfe56fa 83ec78          sub     esp,78h
+8bfe56fd 8bd7            mov     edx,edi
+8bfe56ff 33c0            xor     eax,eax
+8bfe5701 8bfc            mov     edi,esp
+8bfe5703 b91e000000      mov     ecx,1Eh
+8bfe5708 f3ab            rep stos dword ptr es:[edi]
+8bfe570a 8bfa            mov     edi,edx
+8bfe570c 8b0d1462fe8b    mov     ecx,dword ptr [TBHWldDrv+0x3214 (8bfe6214)]
+8bfe5712 648b2d2c000000  mov     ebp,dword ptr fs:[2Ch]
+8bfe5719 8b6c8d00        mov     ebp,dword ptr [ebp+ecx*4]
+8bfe571d 33c0            xor     eax,eax
+8bfe571f 40              inc     eax
+8bfe5720 f00fc14510      lock xadd dword ptr [ebp+10h],eax
+8bfe5725 50              push    eax
+8bfe5726 680070fe8b      push    offset TBHWldDrv+0x4000 (8bfe7000)
+8bfe572b 6a00            push    0
+8bfe572d 6a00            push    0
+8bfe572f ff7500          push    dword ptr [ebp]
+8bfe5732 896500          mov     dword ptr [ebp],esp
+8bfe5735 837d0c00        cmp     dword ptr [ebp+0Ch],0
+8bfe5739 0f8515ffffff    jne     TBHWldDrv+0x2654 (8bfe5654)
+8bfe573f 0f1f00          nop     dword ptr [eax]
+8bfe5742 0f1f00          nop     dword ptr [eax]
+8bfe5745 c7442420a3020080 mov     dword ptr [esp+20h],800002A3h
+8bfe574d e8aee8ffff      call    TBHWldDrv+0x1000 (8bfe4000)
+8bfe5752 8b4d24          mov     ecx,dword ptr [ebp+24h]
+8bfe5755 85c9            test    ecx,ecx
+8bfe5757 0f8597030000    jne     TBHWldDrv+0x2af4 (8bfe5af4)
+8bfe575d 0f1f00          nop     dword ptr [eax]
+8bfe5760 b800000000      mov     eax,0
+8bfe5765 0fbfc0          movsx   eax,ax
+8bfe5768 50              push    eax
+8bfe5769 b85061fe8b      mov     eax,offset TBHWldDrv+0x3150 (8bfe6150)
+8bfe576e 50              push    eax
+8bfe576f ff742404        push    dword ptr [esp+4]
+8bfe5773 6a00            push    0
+8bfe5775 6a22            push    22h
+8bfe5777 b83061fe8b      mov     eax,offset TBHWldDrv+0x3130 (8bfe6130)
+ReadVirtual: 8bfe5789 not properly sign extended
+8bfe577c 50              push    eax
