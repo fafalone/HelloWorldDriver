@@ -143,6 +143,7 @@ In the driver, we receive that command:
 The current location on the stack has all the DeviceIoControl arguments from when we called that API, we check if everything is ok, if so, we copy the data to the i/o packet.
 
 The last thing we handle is the Unload function, where we delete the symbolic link and device object:
+
     Public Sub OnUnload(DriverObject As DRIVER_OBJECT)
         If Device.Size = 0 Then Exit Sub
         IoDeleteSymbolicLink DeviceLink
