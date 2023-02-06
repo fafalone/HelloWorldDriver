@@ -92,7 +92,9 @@ In the driver controller, after starting the driver with the service APIs and co
     AppendLog "Result: ret=0x" & Hex$(result) & ",cbRead=" & cbRet & vbCrLf & "Version (Expecting 1.2.3.4)=" & tVer.Major & "." & tVer.Minor & "." & tVer.Build & "." & tVer.Revision
 
 If we get the version numbers we expect, SUCCESS! Everything has worked.
+
 In the driver, we receive that command:
+
     Public Function OnDeviceControl(ByRef DriverObject As DRIVER_OBJECT, ByRef pIrp As IRP) As Long
     DbgPrint VarPtr(dbgsDevIoEntry)
     Dim lpStack As LongPtr
