@@ -1,0 +1,365 @@
+[ Description ("") ]
+[ FormDesignerId ("B86F330F-0385-436D-92B3-76962B748687") ]
+[ PredeclaredId ]
+Class Form1
+Option Explicit
+Private Type HelloWorldVersion
+	Major As Integer
+    Minor As Integer
+    Build As Integer
+    Revision As Integer
+End Type
+
+Private Const METHOD_BUFFERED = &H0
+Private Const FILE_ACCESS_ANY = &H0
+Private Const FILE_DEVICE_UNKNOWN As Long = &H22
+Private Type SERVICE_STATUS
+    dwServiceType               As Long
+    dwCurrentState              As Long
+    dwControlsAccepted          As Long
+    dwWin32ExitCode             As Long
+    dwServiceSpecificExitCode   As Long
+    dwCheckPoint                As Long
+    dwWaitHint                  As Long
+End Type
+
+Private Const SB_BOTTOM  = 7
+Private Const EM_SCROLL = &HB5
+
+Private Declare PtrSafe Function ControlService Lib "advapi32.dll" ( _
+                         ByVal hService As LongPtr, _
+                         ByVal dwControl As Long, _
+                         ByRef lpServiceStatus As SERVICE_STATUS) As Long
+Private Declare PtrSafe Function OpenSCManager Lib "advapi32.dll" _
+                         Alias "OpenSCManagerW" ( _
+                         ByVal lpMachineName As LongPtr, _
+                         ByVal lpDatabaseName As LongPtr, _
+                         ByVal dwDesiredAccess As Long) As LongPtr
+Private Declare PtrSafe Function CloseServiceHandle Lib "advapi32.dll" ( _
+                         ByVal hSCObject As LongPtr) As Long
+Private Declare PtrSafe Function OpenService Lib "advapi32.dll" _
+                         Alias "OpenServiceW" ( _
+                         ByVal hSCManager As LongPtr, _
+                         ByVal lpServiceName As LongPtr, _
+                         ByVal dwDesiredAccess As Long) As LongPtr
+Private Declare PtrSafe Function CreateService Lib "advapi32.dll" _
+                         Alias "CreateServiceW" ( _
+                         ByVal hSCManager As LongPtr, _
+                         ByVal lpServiceName As LongPtr, _
+                         ByVal lpDisplayName As LongPtr, _
+                         ByVal dwDesiredAccess As Long, _
+                         ByVal dwServiceType As Long, _
+                         ByVal dwStartType As Long, _
+                         ByVal dwErrorControl As Long, _
+                         ByVal lpBinaryPathName As LongPtr, _
+                         ByVal lpLoadOrderGroup As LongPtr, _
+                         ByVal lpdwTagId As LongPtr, _
+                         ByVal lpDependencies As LongPtr, _
+                         ByVal lpServiceStartName As LongPtr, _
+                         ByVal lpPassword As LongPtr) As LongPtr
+Private Declare PtrSafe Function StartService Lib "advapi32.dll" _
+                         Alias "StartServiceW" ( _
+                         ByVal hService As LongPtr, _
+                         ByVal dwNumServiceArgs As Long, _
+                         ByVal lpServiceArgVectors As LongPtr) As Long
+Private Declare PtrSafe Function DeleteService Lib "advapi32.dll" ( _
+                         ByVal hService As LongPtr) As Long
+Private Declare PtrSafe Function CreateFile Lib "kernel32" _
+                         Alias "CreateFileW" ( _
+                         ByVal lpFileName As LongPtr, _
+                         ByVal dwDesiredAccess As Long, _
+                         ByVal dwShareMode As Long, _
+                         ByRef lpSecurityAttributes As Any, _
+                         ByVal dwCreationDisposition As Long, _
+                         ByVal dwFlagsAndAttributes As Long, _
+                         ByVal hTemplateFile As LongPtr) As LongPtr
+Private Declare PtrSafe Function CloseHandle Lib "kernel32" ( _
+                         ByVal hObject As LongPtr) As Long
+Private Declare PtrSafe Function DeviceIoControl Lib "kernel32" ( _
+                         ByVal hDevice As LongPtr, _
+                         ByVal dwIoControlCode As Long, _
+                         ByRef lpInBuffer As Any, _
+                         ByVal nInBufferSize As Long, _
+                         ByRef lpOutBuffer As Any, _
+                         ByVal nOutBufferSize As Long, _
+                         ByRef lpBytesReturned As Long, _
+                         ByRef lpOverlapped As Any) As Long
+Private Declare PtrSafe Function SendMessage Lib "user32" Alias "SendMessageA" (ByVal hWnd As LongPtr, ByVal wMsg As Long, ByVal wParam As LongPtr, lParam As Any) As LongPtr
+Private DeclareWide PtrSafe Function PathFileExistsW Lib "shlwapi" (ByVal lpszPath As String) As Long
+
+Private Const ERROR_SERVICE_ALREADY_RUNNING As Long = 1056&
+Private Const ERROR_SERVICE_EXISTS          As Long = 1073&
+Private Const SERVICE_CONTROL_STOP          As Long = &H1
+Private Const SC_MANAGER_ALL_ACCESS         As Long = &HF003F
+Private Const SERVICE_ALL_ACCESS            As Long = &HF01FF
+Private Const SERVICE_KERNEL_DRIVER         As Long = &H1
+Private Const SERVICE_SYSTEM_START          As Long = &H1
+Private Const SERVICE_DEMAND_START          As Long = &H3
+Private Const SERVICE_ERROR_NORMAL          As Long = &H1
+Private Const GENERIC_READ                  As Long = &H80000000
+Private Const GENERIC_WRITE                 As Long = &H40000000
+Private Const FILE_SHARE_READ               As Long = &H1
+Private Const FILE_SHARE_WRITE              As Long = &H2
+Private Const OPEN_EXISTING                 As Long = 3
+Private Const FILE_ATTRIBUTE_NORMAL         As Long = &H80
+Private Const INVALID_HANDLE_VALUE          As Long = -1
+Private Const STATUS_SUCCESS = 0&
+Private Const STATUS_INVALID_PARAMETER = &HC000000D
+Private Const STATUS_INVALID_DEVICE_REQUEST = &HC0000010
+
+Private IOCTL_HWRLD_VERSION As Long
+Private DriverName As String
+
+Private DriverFile  As String
+Private hMgr        As LongPtr
+Private hSrv        As LongPtr
+Private hDev        As LongPtr
+
+Private Sub InitFuncs()
+IOCTL_HWRLD_VERSION = CTL_CODE(FILE_DEVICE_UNKNOWN, &h801&, METHOD_BUFFERED, FILE_ACCESS_ANY)
+End Sub
+Private Function NT_SUCCESS( _
+                ByVal Status As Long) As Boolean
+    NT_SUCCESS = Status >= STATUS_SUCCESS
+End Function
+Private Function CTL_CODE(ByVal DeviceType As Long, ByVal lFunction As Long, ByVal Method As Long, ByVal Access As Long) As Long
+    CTL_CODE = ((DeviceType) << 16) Or ((Access) << 14) Or ((lFunction) << 2) Or (Method)
+End Function
+
+Private Sub Command2_Click() Handles Command2.Click
+    If hDev Then
+        AppendLog "Already connected to driver."
+        Exit Sub
+    End If
+    ' // Open SC manager database
+    hMgr = OpenSCManager(0, 0, SC_MANAGER_ALL_ACCESS)
+    
+    If hMgr Then
+        AppendLog "Loaded service manager..."
+    Else
+        AppendLog "Unable to load SC manager, err=0x" & Hex$(Err.LastDllError)
+        Exit Sub
+    End If
+
+    ' // Create servise
+    hSrv = CreateService(hMgr, StrPtr(DriverName), StrPtr(DriverName), SERVICE_ALL_ACCESS, _
+                        SERVICE_KERNEL_DRIVER, IIf(Check1.Value = vbChecked, SERVICE_SYSTEM_START, SERVICE_DEMAND_START), SERVICE_ERROR_NORMAL, StrPtr(DriverFile), _
+                        0, 0, 0, 0, 0)
+
+    ' // If service already has beend launched
+    If hSrv = 0 And Err.LastDllError = ERROR_SERVICE_EXISTS Then
+        ' // Open existing service
+        AppendLog "Service already exists, opening..."
+        hSrv = OpenService(hMgr, StrPtr(DriverName), SERVICE_ALL_ACCESS)
+    End If
+
+    If hSrv Then
+        AppendLog "Successfully created service..."
+    Else
+        AppendLog "Error: Unable to create or open service, err=0x" & Hex$(Err.LastDllError)
+        Exit Sub
+    End If
+    
+    ' // Launch driver
+    If StartService(hSrv, 0, 0) Then
+        AppendLog "Successfully started driver!"
+    Else
+        If Err.LastDllError Then
+            If Err.LastDllError = ERROR_SERVICE_ALREADY_RUNNING Then
+                AppendLog "Service was already running."
+            Else
+                AppendLog "Error: Unable to start service, err=0x" & Hex$(Err.LastDllError)
+                Exit Sub
+            End If
+        End If
+    End If
+    
+    ' // Connect to driver
+    hDev = CreateFile(StrPtr("\\.\" & DriverName), GENERIC_READ Or FILE_SHARE_WRITE, FILE_SHARE_READ Or FILE_SHARE_WRITE, ByVal 0&, _
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0)
+
+    If hDev = INVALID_HANDLE_VALUE Then
+        AppendLog "Error: Unable to connect to driver, err=0x" & Err.LastDllError
+    Else
+        AppendLog "Successfully connected to driver!"
+    End If
+End Sub
+
+
+Public Sub AppendLog(sMsg As String)
+sMsg = "[" & Format$(Now, "Hh:nn:Ss") & "] " & sMsg
+Text1.Text = Text1.Text & sMsg & vbCrLf
+SendMessage Text1.hWnd, EM_SCROLL, SB_BOTTOM, ByVal 0&
+End Sub
+
+Private Sub Command5_Click() Handles Command5.Click
+    Dim Status As SERVICE_STATUS
+    
+    ' // Disconnect driver
+    If hDev Then
+        CloseHandle hDev
+        hDev = 0
+        AppendLog "Disconnected from driver."
+    End If
+    
+    ' // Stop driver
+    If hSrv Then
+        ControlService hSrv, SERVICE_CONTROL_STOP, Status
+        DeleteService hSrv
+        AppendLog "Stopped driver and deleted service."
+    End If
+    
+    ' // Close handles
+    If hSrv Then CloseServiceHandle hSrv
+    If hMgr Then CloseServiceHandle hMgr
+    hSrv = 0: hMgr = 0
+    AppendLog "Closed service handles."
+End Sub
+
+Private Sub Command6_Click() Handles Command6.Click
+    Unload Me
+End Sub
+
+Private Sub Form_Load() Handles Form.Load
+    InitFuncs
+    ' // Get driver file name
+    DriverName = "TBHWldDrv"
+    DriverFile = App.Path & "\" & DriverName & ".sys"
+
+    If PathFileExistsW(DriverFile) Then
+        AppendLog "Driver file found. If installed in boot, click Connect." & vbCrLf & "Otherwise, click Load Driver."
+    Else
+        AppendLog "Error: Can't find driver. TBHWldDrv.sys must be placed in the same folder as this program."
+        AppendLog "Please put the driver in the same folder and restart this controller."
+        AppendLog "Or, if you're loading a different driver, enter it's name and click 'Set'"
+        Command1.Enabled = False
+        Command2.Enabled = False
+        Command3.Enabled = False
+        Command4.Enabled = False
+        Command5.Enabled = False
+    End If
+End Sub
+
+Private Sub Form_Unload(Cancel As Integer) Handles Form.Unload
+    Dim r As VbMsgBoxResult
+    Dim status As SERVICE_STATUS
+    If hSrv Then
+        r = MsgBox("Delete driver service?", vbInformation + vbYesNoCancel, "Driver Controller")
+    End If
+    If r = vbCancel Then Cancel = 1: Exit Sub
+    ' // Disconnect driver
+    If hDev Then CloseHandle hDev
+    If hSrv Then
+        If r = vbYes Then
+            ControlService hSrv, SERVICE_CONTROL_STOP, status
+            DeleteService hSrv
+        End If
+    End If
+    ' // Close handles
+    If hSrv Then CloseServiceHandle hSrv
+    If hMgr Then CloseServiceHandle hMgr
+End Sub
+
+Private Sub Form_Resize() Handles Form.Resize
+    Dim cx As Long, cy As Long
+    If Form1.Width < 300 Then
+    	cx = 300
+    Else
+        cx = Form1.Width - 150
+    End If
+    If Form1.Height < 315 Then
+        cy = 315
+    Else
+    	cy = Form1.Height - 14
+    End If
+
+    Text1.Width = cx
+    Text1.Height = cy
+End Sub
+
+Private Sub Command1_Click() Handles Command1.Click
+    ' // Connect to driver
+    hDev = CreateFile(StrPtr("\\.\" & DriverName), GENERIC_READ Or FILE_SHARE_WRITE, FILE_SHARE_READ Or FILE_SHARE_WRITE, ByVal 0&, _
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0)
+
+    If hDev = INVALID_HANDLE_VALUE Then
+        AppendLog "Error: Unable to connect to driver, not loaded? err=0x" & Err.LastDllError & vbCrLf & _
+            "If you didn't install the driver to load on startup, you must click 'Load Driver' instead."
+    Else
+        AppendLog "Successfully connected to driver!"
+    End If
+End Sub
+
+Private Sub Command3_Click() Handles Command3.Click
+    If hDev = 0 Then
+        AppendLog "GetVersion Error: Not connected to driver."
+        Exit Sub
+    End If
+    
+    Dim tVer As HelloWorldVersion
+    Dim lVerify As Long
+    Dim cbRet As Long
+    Dim result As Long
+    AppendLog "Sending IOCTL_HWRLD_VERSION to driver..."
+    result = DeviceIoControl(hDev, IOCTL_HWRLD_VERSION, lVerify, 4&, tVer, LenB(tVer), cbRet, ByVal 0&)
+    AppendLog "Result: ret=0x" & Hex$(result) & ",cbRead=" & cbRet & vbCrLf & "Version (Expecting 1.2.3.4)=" & tVer.Major & "." & tVer.Minor & "." & tVer.Build & "." & tVer.Revision
+    If result = 0 Then
+        AppendLog "Did not receive success result, lastErr=0x" & Err.LastDllError & ",hDev=" & hDev
+    End If
+End Sub
+
+Private Sub Command4_Click() Handles Command4.Click
+    If hDev Then CloseHandle hDev
+    If hMgr = 0 Then
+        hMgr = OpenSCManager(0, 0, SC_MANAGER_ALL_ACCESS)
+        
+        If hMgr Then
+            AppendLog "Loaded service manager..."
+        Else
+            AppendLog "Unable to establish connection with SC manager, err=0x" & Hex$(Err.LastDllError)
+            Exit Sub
+        End If
+    End If
+    If hSrv = 0 Then
+        hSrv = OpenService(hMgr, StrPtr(DriverName), SERVICE_ALL_ACCESS)
+        If hSrv Then
+            AppendLog "Opened driver service..."
+        Else
+            AppendLog "Error: Unable to open service, err=0x" & Hex$(Err.LastDllError)
+            Exit Sub
+        End If
+    End If
+    Dim status As SERVICE_STATUS
+    Dim lRet As Long
+    lRet = ControlService(hSrv, SERVICE_CONTROL_STOP, status)
+    If lRet = 0 Then
+        AppendLog "Failed to stop service, Err=0x" & Hex$(Err.LastDllError) & ", Service status=" & status.dwCurrentState
+    Else
+    	AppendLog "Successfully stopped driver service."
+    End If
+End Sub
+
+Private Sub Command7_Click() Handles Command7.Click
+    DriverName = Text2.Text
+    DriverFile = App.Path & "\" & DriverName & ".sys"
+
+    If PathFileExistsW(DriverFile) Then
+        AppendLog "Driver file found. If installed in boot, click Connect." & vbCrLf & "Otherwise, click Load Driver."
+        Command1.Enabled = True
+        Command2.Enabled = True
+        Command3.Enabled = True
+        Command4.Enabled = True
+        Command5.Enabled = True
+    Else
+        AppendLog "Error: Can't find driver. " & DriverName & ".sys must be placed in the same folder as this program."
+        AppendLog "Please put the driver in the same folder and restart this controller."
+        Command1.Enabled = False
+        Command2.Enabled = False
+        Command3.Enabled = False
+        Command4.Enabled = False
+        Command5.Enabled = False
+    End If
+End Sub
+
+
+End Class

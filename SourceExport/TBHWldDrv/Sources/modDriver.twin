@@ -1,0 +1,566 @@
+Module modDriver
+Option Explicit
+'******************************************************************************
+'twinBASIC Driver Demo: Hello World Driver v1.2.3.4
+'Author: Jon Johnson (fafalone)
+'
+'This is a demonstration of using tB to create a kernel-mode driver.
+'All it does is return it's version information.
+'
+'Definitions mainly from The trick's TrickMemReader VB6 driver, as well the
+'method for initializing the Driver Name and Link Name. I converted those
+'to x64-compatible and added some of my own.
+'https://www.vbforums.com/showthread.php?788179-VB6-Kernel-mode-driver
+'
+'Structure and functionality are heavily based on Geoff Chappell's self-sign
+'driver example, as I followed (and recommend you follow) that method to test
+'self-signing to run on x64 platforms.
+'https://www.geoffchappell.com/notes/windows/license/customkernelsigners.htm
+'
+'You can also disable signature verification by rebooting and using the 
+'Advanced Boot Menu; or enable testsigning mode.
+'******************************************************************************
+
+'Project definitions:
+'A custom version structure, which is what we'll be passing to our controller.
+Private Type HelloWorldVersion
+	Major As Integer
+    Minor As Integer
+    Build As Integer
+    Revision As integer
+End Type
+
+'We can't use String variables in kernel mode; VB/tB manage them with APIs behind
+'the scenes, and we can't call any APIs besides ones in ntoskrnl.exe
+'So set up arrays to represent them. We have one for Unicode; 2 bytes per char,
+'and one ANSI one, for DbgPrint which uses 1-byte ANSI chars.
+Private Type BinaryString
+    D(255) As Integer
+End Type
+Private Type DebugCSTR
+    aCh(0 To 49) As Byte
+End Type
+
+'We define custom IOCTL_ commands to communicate with user mode; these are set
+'with the CTL_CODE macro, defined in code.
+Private IOCTL_HWRLD_VERSION As Long
+
+'These represent our driver: it's name, a name for the link to user mode, and
+'the device object.
+Private DeviceName       As UNICODE_STRING   ' // Device name unicode string
+Private DeviceLink       As UNICODE_STRING   ' // Device link unicode string
+Private strName As BinaryString     ' // Device name string
+Private strLink As BinaryString     ' // Device link string
+
+Private Device           As DEVICE_OBJECT    ' // Device object
+
+'Here's our debug strings for DbgPrint
+Private dbgsEntry As DebugCSTR 'Entry point success
+Private dbgsDevIoEntry As DebugCSTR 'DeviceIoControl received
+Private dbgsStackOk As DebugCSTR
+Private dbgsStackFail As DebugCSTR
+Private dbgsCmdOk As DebugCSTR
+Private dbgsCmdFailCode As DebugCSTR
+Private dbgsCmdFailPtr As DebugCSTR
+Private dbgsNoBuffer As DebugCSTR
+Private dbgsBadSize As DebugCSTR
+Private dbgsNoVal As DebugCSTR
+Private dbgsCopyOut As DebugCSTR
+
+
+'API Definitions:
+Private Type LARGE_INTEGER
+    lowPart As Long
+    highPart As Long
+End Type
+
+Private Type UNICODE_STRING
+    Length              As Integer
+    MaximumLength       As Integer
+    lpBuffer            As LongPtr
+End Type
+
+Private Type LIST_ENTRY
+    Flink               As LongPtr
+    Blink               As LongPtr
+End Type
+
+Private Type KDEVICE_QUEUE
+    Type                As Integer
+    Size                As Integer
+    DeviceListHead      As LIST_ENTRY
+    Lock                As LongPtr
+    Busy                As Long
+End Type
+
+Private Type KDPC
+    Type                As Byte
+    Importance          As Byte
+    Number              As Integer
+    DpcListEntry        As LongPtr
+    ProcessorHistory    As LongPtr
+    DeferredRoutine     As LongPtr
+    DeferredContext     As LongPtr
+    SystemArgument1     As LongPtr
+    SystemArgument2     As LongPtr
+    DpcData             As LongPtr
+End Type
+
+Private Type DISPATCHER_HEADER
+    Lock                As Long
+    SignalState         As Long
+    WaitListHead        As LIST_ENTRY
+End Type
+
+Private Type KEVENT
+    Header              As DISPATCHER_HEADER
+End Type
+
+Private Type IO_STATUS_BLOCK
+    StatusPointer       As LongPtr
+    Information         As LongPtr
+End Type
+
+Private Type IRP
+    Type                As Integer
+    Size                As Integer  '2
+    MdlAddress          As LongPtr  '8
+    Flags               As Long     '16
+    AssociatedIrp       As LongPtr  '24
+    ThreadListEntry     As LIST_ENTRY '32
+    IoStatus            As IO_STATUS_BLOCK '48
+    RequestorMode       As Byte      '64
+    PendingReturned     As Byte
+    StackCount          As Byte
+    CurrentLocation     As Byte
+    Cancel              As Byte
+    CancelIrql          As Byte
+    ApcEnvironment      As Byte
+    AllocationFlags     As Byte
+    UserIosb            As LongPtr   '72
+    UserEvent           As LongPtr   '80
+    #If Win64 Then
+    Overlay(15)         As Byte  '88
+    #Else
+    Overlay(7)          As Byte
+    #End If
+    CancelRoutine       As LongPtr   '104
+    UserBuffer          As LongPtr   '112
+    'Tail
+    DriverContext(3)    As LongPtr   '120
+    Thread              As LongPtr   '152
+    AuxiliaryBuffer     As LongPtr   '160
+    ListEntry           As LIST_ENTRY '168
+    CurrentStackLocation As LongPtr  '184
+    OriginalFileObject  As LongPtr    '192
+    Pad                 As LongLong 'Tail union alternate _KAPC is 8 bytes larger on both x86 and x64
+End Type 'Expected size (x64=0xD0) (x86=0x70)
+
+'One must be *incredibly* careful about alignments. Because while unexpected issues are rare with 32bit,
+'64bit will encounter a lot more issues. For instance with the below, tB inserts 4 bytes behind the 
+'scenes so in IO_STACK_LOCATION, the first member of the union struct we're using is at 0x8; not 0x4.
+'Always confirm final sizes (LenB *ONLY*! Len does not include align pads) with the following:
+'https://www.vergiliusproject.com/kernels
+
+Private Type DEVICEIOCTL       'Comments: x64 alignments
+    OutputBufferLength  As Long  '0x8
+    #If Win64 Then
+    zPtrAlign2 As Long
+    #End If
+    InputBufferLength   As Long   '0x10
+    #If Win64 Then
+    zPtrAlign3 As Long
+    #End If
+    IoControlCode       As Long   '0x18
+    Type3InputBuffer    As LongPtr '0x20
+End Type
+
+Private Type IO_STACK_LOCATION
+    MajorFunction       As Byte       '0x0
+    MinorFunction       As Byte       '0x1
+    Flags               As Byte       '0x2
+    Control             As Byte       '0x3
+    'There's a union here; the DeviceIoControl
+    'struct is what we're interested in right now.
+    'You may need multiple versions of this for other
+    'uses until there's union support.
+    DeviceIoControl     As DEVICEIOCTL '0x8
+    DeviceObject        As LongPtr    '0x28
+    FileObject          As LongPtr    '0x30
+    CompletionRoutine   As LongPtr    '0x38
+    Context             As LongPtr    '0x40
+End Type 'Expected size (x64) = 0x48
+
+Private Type DRIVER_OBJECT
+    Type                As Integer
+    Size                As Integer
+    DeviceObject        As LongPtr
+    Flags               As Long
+    DriverStart         As LongPtr
+    DriverSize          As Long
+    DriverSection       As LongPtr
+    DriverExtension     As LongPtr
+    DriverName          As UNICODE_STRING
+    HardwareDatabase    As LongPtr
+    FastIoDispatch      As LongPtr
+    DriverInit          As LongPtr
+    DriverStartIo       As LongPtr
+    DriverUnload        As LongPtr
+    MajorFunction(IRP_MJ_MAXIMUM_FUNCTION)   As LongPtr
+End Type 'Expected size x64=0x150, x86=0xa8
+
+Private Type DEVICE_OBJECT
+    Type                As Integer
+    Size                As Integer
+    ReferenceCount      As Long
+    DriverObject        As LongPtr
+    NextDevice          As LongPtr
+    AttachedDevice      As LongPtr
+    CurrentIrp          As LongPtr
+    Timer               As LongPtr
+    Flags               As Long
+    Characteristics     As Long
+    Vpb                 As LongPtr
+    DeviceExtension     As LongPtr
+    DeviceType          As Long
+    StackSize           As Byte
+    #If Win64 Then
+    Queue(71)           As Byte 'This includes alignment padding, so be careful if copying out.
+    #Else
+    Queue(39)           As Byte
+    #End If
+    AlignRequirement    As Long
+    DeviceQueue         As KDEVICE_QUEUE
+    Dpc                 As KDPC
+    ActiveThreadCount   As Long
+    SecurityDescriptor  As LongPtr
+    DeviceLock          As KEVENT
+    SectorSize          As Integer
+    Spare1              As Integer
+    DeviceObjExtension  As LongPtr
+    Reserved            As LongPtr
+End Type 'Expected size x64=0x150, x86=0xb8
+
+Private Type FILE_OBJECT
+	Type                 As Integer
+    Size                 As Integer
+    DeviceObject         As LongPtr
+    Vpb                  As LongPtr
+    FsContext            As LongPtr
+    FsContext2           As LongPtr
+    SectionObjectPointer As LongPtr
+    PrivateCacheMap      As LongPtr
+    FinalStatus          As Long
+    RelatedFileObject    As LongPtr
+    LockOperation        As Byte
+    DeletePending        As Byte
+    ReadAccess           As Byte
+    WriteAccess          As Byte
+    DeleteAccess         As Byte
+    SharedRead           As Byte
+    SharedWrite          As Byte
+    SharedDelete         As Byte
+    Flags                As Long
+    FileName             As UNICODE_STRING
+    CurrentByteOffset    As LARGE_INTEGER
+    Waiters              As Long
+    Busy                 As Long
+    LastLock             As LongPtr
+    Lock                 As KEVENT
+    Event                As KEVENT
+    CompletionContext    As LongPtr
+    IrpListLock          As LongPtr
+    IrpList              As LIST_ENTRY
+    FileObjectExtension  As LongPtr
+End Type 'Expected size x64=0xD8, x86=0x80
+
+Private Const FILE_DEVICE_UNKNOWN    As Long = &H22
+Private Const IO_NO_INCREMENT        As Long = &H0
+
+Private Const IRP_MJ_CREATE  = &H00
+Private Const IRP_MJ_CREATE_NAMED_PIPE  = &H01
+Private Const IRP_MJ_CLOSE  = &H02
+Private Const IRP_MJ_READ  = &H03
+Private Const IRP_MJ_WRITE  = &H04
+Private Const IRP_MJ_QUERY_INFORMATION  = &H05
+Private Const IRP_MJ_SET_INFORMATION  = &H06
+Private Const IRP_MJ_QUERY_EA  = &H07
+Private Const IRP_MJ_SET_EA  = &H08
+Private Const IRP_MJ_FLUSH_BUFFERS  = &H09
+Private Const IRP_MJ_QUERY_VOLUME_INFORMATION  = &H0a
+Private Const IRP_MJ_SET_VOLUME_INFORMATION  = &H0b
+Private Const IRP_MJ_DIRECTORY_CONTROL  = &H0c
+Private Const IRP_MJ_FILE_SYSTEM_CONTROL  = &H0d
+Private Const IRP_MJ_DEVICE_CONTROL  = &H0e
+Private Const IRP_MJ_INTERNAL_DEVICE_CONTROL  = &H0f
+Private Const IRP_MJ_SHUTDOWN  = &H10
+Private Const IRP_MJ_LOCK_CONTROL  = &H11
+Private Const IRP_MJ_CLEANUP  = &H12
+Private Const IRP_MJ_CREATE_MAILSLOT  = &H13
+Private Const IRP_MJ_QUERY_SECURITY  = &H14
+Private Const IRP_MJ_SET_SECURITY  = &H15
+Private Const IRP_MJ_POWER  = &H16
+Private Const IRP_MJ_SYSTEM_CONTROL  = &H17
+Private Const IRP_MJ_DEVICE_CHANGE  = &H18
+Private Const IRP_MJ_QUERY_QUOTA  = &H19
+Private Const IRP_MJ_SET_QUOTA  = &H1A
+Private Const IRP_MJ_PNP  = &H1B
+
+Private Const IRP_MJ_MAXIMUM_FUNCTION As Long = &H1B
+
+Private Const STATUS_SUCCESS = 0&
+Private Const STATUS_INVALID_PARAMETER = &HC000000D
+Private Const STATUS_INVALID_DEVICE_REQUEST = &HC0000010
+Private Const STATUS_BUFFER_ALL_ZEROS = &H117
+Private Const STATUS_INVALID_BUFFER_SIZE = &HC0000206
+
+Private Const METHOD_BUFFERED = &H0
+Private Const FILE_ACCESS_ANY = &H0
+
+
+'Drivers can only import from ntoskrnl.exe. You need to be careful which language features you use; strings and arrays besides 1-D inside UDTs
+'utilize APIs behind the scenes from other libraries (currently, I opened a feature request for non-SAFEARRAY arrays), and cannot be used in drivers.
+[ UseGetLastError (False) ]
+Private Declare PtrSafe Function DbgPrint CDecl Lib "ntoskrnl.exe" (ByVal Format As LongPtr /* Currently unsupported in kernel mode: , ByVal ParamArray Args As Any()*/) As Long
+Private Declare PtrSafe Function IoCreateDevice Lib "ntoskrnl.exe" (DriverObject As DRIVER_OBJECT, _
+                                                                    ByVal DeviceExtensionSize As Long, _
+                                                                    DeviceName As UNICODE_STRING, _
+                                                                    ByVal DeviceType As Long, _
+                                                                    ByVal DeviceCharacteristics As Long, _
+                                                                    ByVal Exclusive As Long, _
+                                                                    DeviceObject As DEVICE_OBJECT) As Long
+
+Private Declare PtrSafe Sub IoCompleteRequest Lib "ntoskrnl.exe" (pIrp As IRP, ByVal PriorityBoost As Byte)
+Private Declare PtrSafe Function IoCreateSymbolicLink Lib "ntoskrnl.exe" (SymbolicLinkName As UNICODE_STRING, DeviceName As UNICODE_STRING) As Long
+Private Declare PtrSafe Function IoDeleteSymbolicLink Lib "ntoskrnl.exe" (SymbolicLinkName As UNICODE_STRING) As Long
+Private Declare PtrSafe Sub IoDeleteDevice Lib "ntoskrnl.exe" (DeviceObject As Any)
+Private Declare PtrSafe Sub RtlInitUnicodeString Lib "ntoskrnl.exe" (DestinationString As UNICODE_STRING, SourceString As Any)
+Private Declare PtrSafe Sub CopyMemory Lib "ntoskrnl.exe" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
+
+Private Sub InitFuncs()
+    IOCTL_HWRLD_VERSION = CTL_CODE(FILE_DEVICE_UNKNOWN, &h801&, METHOD_BUFFERED, FILE_ACCESS_ANY)
+End Sub
+
+Private Function NT_SUCCESS(ByVal Status As Long) As Boolean
+    NT_SUCCESS = Status >= STATUS_SUCCESS
+End Function
+
+Private Function CTL_CODE(ByVal DeviceType As Long, ByVal lFunction As Long, ByVal Method As Long, ByVal Access As Long) As Long
+   CTL_CODE = ((DeviceType) << 16) Or ((Access) << 14) Or ((lFunction) << 2) Or (Method)
+End Function
+
+Private Function IoGetCurrentIrpStackLocation(ByRef pIrp As IRP) As LongPtr
+    IoGetCurrentIrpStackLocation = pIrp.CurrentStackLocation
+End Function
+
+Public Function DriverEntry(ByRef DriverObject As DRIVER_OBJECT, ByRef RegistryPath As UNICODE_STRING) As Long
+    InitDebugStrings
+    DbgPrint VarPtr(dbgsEntry)
+    InitUnicodeStrings
+    InitFuncs
+
+    Dim ntStatus As Long
+
+    ntStatus = IoCreateDevice(DriverObject, 0&, DeviceName, FILE_DEVICE_UNKNOWN, 0&, False, Device)
+    If NT_SUCCESS(ntStatus) Then
+        ntStatus = IoCreateSymbolicLink(DeviceLink, DeviceName)
+        If Not NT_SUCCESS(ntStatus) Then
+            IoDeleteDevice Device
+            DriverEntry = ntStatus
+            Exit Function
+        End If
+
+       Dim i As Long
+       For i = 0 To IRP_MJ_MAXIMUM_FUNCTION
+               DriverObject.MajorFunction(i) = AddressOf OnOther
+       Next
+        DriverObject.MajorFunction(IRP_MJ_CREATE) = AddressOf OnCreate
+        DriverObject.MajorFunction(IRP_MJ_CLOSE) = AddressOf OnClose
+        DriverObject.MajorFunction(IRP_MJ_DEVICE_CONTROL) = AddressOf OnDeviceControl
+
+        DriverObject.DriverUnload = AddressOf OnUnload
+    End If
+     
+    DriverEntry = ntStatus
+End Function
+
+Public Function OnCreate(ByRef DriverObject As DRIVER_OBJECT, ByRef pIrp As IRP) As Long
+'This seems so simple; I checked the alignments and everything is ok; but it's
+'failing. So I'm disabling the check for now. Will look at for future version.
+'From Geoff Chappell:
+    /*	As explicitly recommended in the DDK documentation (but not done in
+        all of Microsoft's own drivers), check that the caller does indeed
+        mean to open a device.	*/
+'    Dim lpStack As LongPtr
+'    Dim ioStack As IO_STACK_LOCATION
+'    Dim tFO As FILE_OBJECT
+'    lpStack = IoGetCurrentIrpStackLocation(pIrp)
+'    If lpStack Then
+'        CopyMemory ioStack, ByVal lpStack, LenB(ioStack)
+'        If ioStack.FileObject Then
+'            CopyMemory tFO, ByVal ioStack.FileObject, LenB(tFO)
+           Dim ntStatus As Long
+        '    If tFO.FileName.Length Then
+                ntStatus = STATUS_SUCCESS
+        '    Else
+        '        ntStatus = STATUS_INVALID_PARAMETER
+        '    End If
+           pIrp.IoStatus.Information = 0
+           pIrp.IoStatus.StatusPointer = ntStatus
+           IoCompleteRequest pIrp, IO_NO_INCREMENT
+           OnCreate = ntStatus
+'        End If
+'    End If
+End Function
+
+Public Function OnClose(ByRef DriverObject As DRIVER_OBJECT, ByRef pIrp As IRP) As Long
+    pIrp.IoStatus.Information = 0
+    pIrp.IoStatus.StatusPointer = STATUS_SUCCESS
+    IoCompleteRequest pIrp, IO_NO_INCREMENT
+    OnClose = STATUS_SUCCESS
+End Function
+
+Public Function OnDeviceControl(ByRef DriverObject As DRIVER_OBJECT, ByRef pIrp As IRP) As Long
+    DbgPrint VarPtr(dbgsDevIoEntry)
+    Dim lpStack As LongPtr
+    Dim ioStack As IO_STACK_LOCATION
+    Dim ntStatus As Long
+
+    pIrp.IoStatus.Information = 0
+    lpStack = IoGetCurrentIrpStackLocation(pIrp)
+    If lpStack Then
+        DbgPrint VarPtr(dbgsStackOk)
+        CopyMemory ioStack, ByVal lpStack, LenB(ioStack)
+        If (ioStack.DeviceIoControl.IoControlCode = IOCTL_HWRLD_VERSION) And (pIrp.AssociatedIrp <> 0) Then
+            DbgPrint VarPtr(dbgsCmdOk)
+            Dim tVer As HelloWorldVersion
+            Dim lpBuffer As LongPtr
+            Dim cbIn As Long, cbOut As Long
+            lpBuffer = pIrp.AssociatedIrp
+            cbIn = ioStack.DeviceIoControl.InputBufferLength
+            cbOut = ioStack.DeviceIoControl.OutputBufferLength
+            If (lpBuffer = 0&) Or (cbIn <> 4) Or (cbOut <> LenB(tVer)) Then
+                If (lpBuffer = 0&) Then
+                    ntStatus = STATUS_BUFFER_ALL_ZEROS
+                    DbgPrint VarPtr(dbgsNoBuffer)
+                ElseIf (cbOut <> LenB(tVer)) Then
+                    ntStatus = STATUS_INVALID_BUFFER_SIZE
+                    DbgPrint VarPtr(dbgsBadSize)
+                Else
+                    ntStatus = STATUS_INVALID_DEVICE_REQUEST
+                    DbgPrint VarPtr(dbgsNoVal)
+                End If
+            Else
+                DbgPrint VarPtr(dbgsCopyOut)
+                tVer.Major = 1
+                tVer.Minor = 2
+                tVer.Build = 3
+                tVer.Revision = 4
+                CopyMemory ByVal lpBuffer, tVer, cbOut
+                pIrp.IoStatus.Information = LenB(tVer)
+            End If
+            
+            pIrp.IoStatus.StatusPointer = ntStatus
+            IoCompleteRequest pIrp, IO_NO_INCREMENT
+            OnDeviceControl = ntStatus
+            Exit Function
+        Else
+            If pIrp.AssociatedIrp = 0 Then
+                DbgPrint VarPtr(dbgsCmdFailPtr)
+            Else
+                DbgPrint VarPtr(dbgsCmdFailCode)
+            End If
+        End If
+    Else
+        DbgPrint VarPtr(dbgsStackFail)
+    End If
+
+    pIrp.IoStatus.Information = 0
+    ntStatus = STATUS_INVALID_PARAMETER
+    pIrp.IoStatus.StatusPointer = ntStatus
+    IoCompleteRequest pIrp, IO_NO_INCREMENT
+    OnDeviceControl = ntStatus
+End Function
+
+Public Function OnOther(ByRef DriverObject As DRIVER_OBJECT, ByRef pIrp As IRP) As Long
+    Dim ntStatus As Long
+    ntStatus = STATUS_INVALID_DEVICE_REQUEST
+    pIrp.IoStatus.Information = 0
+    pIrp.IoStatus.StatusPointer = ntStatus
+    IoCompleteRequest pIrp, IO_NO_INCREMENT
+    OnOther = ntStatus
+End Function
+
+Public Sub OnUnload(DriverObject As DRIVER_OBJECT)
+    If Device.Size = 0 Then Exit Sub
+    IoDeleteSymbolicLink DeviceLink
+    IoDeleteDevice ByVal DriverObject.DeviceObject
+End Sub
+
+Private Sub InitDebugStrings()
+dbgsEntry.aCh(0) = &h45: dbgsEntry.aCh(1) = &h6E: dbgsEntry.aCh(2) = &h74: dbgsEntry.aCh(3) = &h72: dbgsEntry.aCh(4) = &h79: dbgsEntry.aCh(5) = &h20
+dbgsEntry.aCh(6) = &h70: dbgsEntry.aCh(7) = &h6F: dbgsEntry.aCh(8) = &h69: dbgsEntry.aCh(9) = &h6E: dbgsEntry.aCh(10) = &h74: dbgsEntry.aCh(11) = &h20
+dbgsEntry.aCh(12) = &h73: dbgsEntry.aCh(13) = &h75: dbgsEntry.aCh(14) = &h63: dbgsEntry.aCh(15) = &h63: dbgsEntry.aCh(16) = &h65: dbgsEntry.aCh(17) = &h73
+dbgsEntry.aCh(18) = &h73
+
+dbgsDevIoEntry.aCh(0) = &h44: dbgsDevIoEntry.aCh(1) = &h65: dbgsDevIoEntry.aCh(2) = &h76: dbgsDevIoEntry.aCh(3) = &h69: dbgsDevIoEntry.aCh(4) = &h63
+dbgsDevIoEntry.aCh(5) = &h65: dbgsDevIoEntry.aCh(6) = &h49: dbgsDevIoEntry.aCh(7) = &h6F: dbgsDevIoEntry.aCh(8) = &h43: dbgsDevIoEntry.aCh(9) = &h6F
+dbgsDevIoEntry.aCh(10) = &h6E: dbgsDevIoEntry.aCh(11) = &h74: dbgsDevIoEntry.aCh(12) = &h72: dbgsDevIoEntry.aCh(13) = &h6F: dbgsDevIoEntry.aCh(14) = &h6C
+dbgsDevIoEntry.aCh(15) = &h20: dbgsDevIoEntry.aCh(16) = &h72: dbgsDevIoEntry.aCh(17) = &h65: dbgsDevIoEntry.aCh(18) = &h63: dbgsDevIoEntry.aCh(19) = &h65
+dbgsDevIoEntry.aCh(20) = &h69: dbgsDevIoEntry.aCh(21) = &h76: dbgsDevIoEntry.aCh(22) = &h65: dbgsDevIoEntry.aCh(23) = &h64
+
+dbgsStackOk.aCh(0) = &H56: dbgsStackOk.aCh(1) = &H61: dbgsStackOk.aCh(2) = &H6C: dbgsStackOk.aCh(3) = &H69: dbgsStackOk.aCh(4) = &H64: dbgsStackOk.aCh(5) = &H61
+dbgsStackOk.aCh(6) = &H74: dbgsStackOk.aCh(7) = &H65: dbgsStackOk.aCh(8) = &H64: dbgsStackOk.aCh(9) = &H20: dbgsStackOk.aCh(10) = &H73: dbgsStackOk.aCh(11) = &H74
+dbgsStackOk.aCh(12) = &H61: dbgsStackOk.aCh(13) = &H63: dbgsStackOk.aCh(14) = &H6B: dbgsStackOk.aCh(15) = &H20: dbgsStackOk.aCh(16) = &H70: dbgsStackOk.aCh(17) = &H74
+dbgsStackOk.aCh(18) = &H72
+
+dbgsStackFail.aCh(0) = &H4E: dbgsStackFail.aCh(1) = &H6F: dbgsStackFail.aCh(2) = &H20: dbgsStackFail.aCh(3) = &H73: dbgsStackFail.aCh(4) = &H74: dbgsStackFail.aCh(5) = &H61
+dbgsStackFail.aCh(6) = &H63: dbgsStackFail.aCh(7) = &H6B: dbgsStackFail.aCh(8) = &H20: dbgsStackFail.aCh(9) = &H70: dbgsStackFail.aCh(10) = &H74: dbgsStackFail.aCh(11) = &H72
+
+dbgsCmdOk.aCh(0) = &H56: dbgsCmdOk.aCh(1) = &H61: dbgsCmdOk.aCh(2) = &H6C: dbgsCmdOk.aCh(3) = &H69: dbgsCmdOk.aCh(4) = &H64: dbgsCmdOk.aCh(5) = &H61: dbgsCmdOk.aCh(6) = &H74
+dbgsCmdOk.aCh(7) = &H65: dbgsCmdOk.aCh(8) = &H64: dbgsCmdOk.aCh(9) = &H20: dbgsCmdOk.aCh(10) = &H63: dbgsCmdOk.aCh(11) = &H6D: dbgsCmdOk.aCh(12) = &H64: dbgsCmdOk.aCh(13) = &H63
+dbgsCmdOk.aCh(14) = &H6F: dbgsCmdOk.aCh(15) = &H64: dbgsCmdOk.aCh(16) = &H65: dbgsCmdOk.aCh(17) = &H20: dbgsCmdOk.aCh(18) = &H61: dbgsCmdOk.aCh(19) = &H6E: dbgsCmdOk.aCh(20) = &H64
+dbgsCmdOk.aCh(21) = &H20: dbgsCmdOk.aCh(22) = &H61: dbgsCmdOk.aCh(23) = &H73: dbgsCmdOk.aCh(24) = &H63: dbgsCmdOk.aCh(25) = &H49: dbgsCmdOk.aCh(26) = &H72: dbgsCmdOk.aCh(27) = &H70
+
+dbgsCmdFailCode.aCh(0) = &H49: dbgsCmdFailCode.aCh(1) = &H6E: dbgsCmdFailCode.aCh(2) = &H76: dbgsCmdFailCode.aCh(3) = &H61: dbgsCmdFailCode.aCh(4) = &H6C: dbgsCmdFailCode.aCh(5) = &H69
+dbgsCmdFailCode.aCh(6) = &H64: dbgsCmdFailCode.aCh(7) = &H20: dbgsCmdFailCode.aCh(8) = &H63: dbgsCmdFailCode.aCh(9) = &H6D: dbgsCmdFailCode.aCh(10) = &H64: dbgsCmdFailCode.aCh(11) = &H63
+dbgsCmdFailCode.aCh(12) = &H6F: dbgsCmdFailCode.aCh(13) = &H64: dbgsCmdFailCode.aCh(14) = &H65
+
+dbgsCmdFailPtr.aCh(0) = &H49: dbgsCmdFailPtr.aCh(1) = &H6E: dbgsCmdFailPtr.aCh(2) = &H76: dbgsCmdFailPtr.aCh(3) = &H61: dbgsCmdFailPtr.aCh(4) = &H6C: dbgsCmdFailPtr.aCh(5) = &H69
+dbgsCmdFailPtr.aCh(6) = &H64: dbgsCmdFailPtr.aCh(7) = &H20: dbgsCmdFailPtr.aCh(8) = &H61: dbgsCmdFailPtr.aCh(9) = &H73: dbgsCmdFailPtr.aCh(10) = &H63: dbgsCmdFailPtr.aCh(11) = &H49
+dbgsCmdFailPtr.aCh(12) = &H72: dbgsCmdFailPtr.aCh(13) = &H70
+
+dbgsNoBuffer.aCh(0) = &H4E: dbgsNoBuffer.aCh(1) = &H6F: dbgsNoBuffer.aCh(2) = &H20: dbgsNoBuffer.aCh(3) = &H62: dbgsNoBuffer.aCh(4) = &H75: dbgsNoBuffer.aCh(5) = &H66
+dbgsNoBuffer.aCh(6) = &H66: dbgsNoBuffer.aCh(7) = &H65: dbgsNoBuffer.aCh(8) = &H72: dbgsNoBuffer.aCh(9) = &H20: dbgsNoBuffer.aCh(10) = &H70: dbgsNoBuffer.aCh(11) = &H74
+dbgsNoBuffer.aCh(12) = &H72
+
+dbgsBadSize.aCh(0) = &H42: dbgsBadSize.aCh(1) = &H61: dbgsBadSize.aCh(2) = &H64: dbgsBadSize.aCh(3) = &H20: dbgsBadSize.aCh(4) = &H62: dbgsBadSize.aCh(5) = &H75
+dbgsBadSize.aCh(6) = &H66: dbgsBadSize.aCh(7) = &H66: dbgsBadSize.aCh(8) = &H65: dbgsBadSize.aCh(9) = &H72: dbgsBadSize.aCh(10) = &H20: dbgsBadSize.aCh(11) = &H73
+dbgsBadSize.aCh(12) = &H69: dbgsBadSize.aCh(13) = &H7A: dbgsBadSize.aCh(14) = &H65
+
+dbgsNoVal.aCh(0) = &H46: dbgsNoVal.aCh(1) = &H61: dbgsNoVal.aCh(2) = &H69: dbgsNoVal.aCh(3) = &H6C: dbgsNoVal.aCh(4) = &H65: dbgsNoVal.aCh(5) = &H64: dbgsNoVal.aCh(6) = &H20
+dbgsNoVal.aCh(7) = &H69: dbgsNoVal.aCh(8) = &H6E: dbgsNoVal.aCh(9) = &H70: dbgsNoVal.aCh(10) = &H75: dbgsNoVal.aCh(11) = &H74: dbgsNoVal.aCh(12) = &H20: dbgsNoVal.aCh(13) = &H76
+dbgsNoVal.aCh(14) = &H61: dbgsNoVal.aCh(15) = &H6C: dbgsNoVal.aCh(16) = &H69: dbgsNoVal.aCh(17) = &H64: dbgsNoVal.aCh(18) = &H61: dbgsNoVal.aCh(19) = &H74: dbgsNoVal.aCh(20) = &H69
+dbgsNoVal.aCh(21) = &H6F: dbgsNoVal.aCh(22) = &H6E
+
+dbgsCopyOut.aCh(0) = &H41: dbgsCopyOut.aCh(1) = &H6C: dbgsCopyOut.aCh(2) = &H6C: dbgsCopyOut.aCh(3) = &H20: dbgsCopyOut.aCh(4) = &H6F: dbgsCopyOut.aCh(5) = &H6B
+dbgsCopyOut.aCh(6) = &H2C: dbgsCopyOut.aCh(7) = &H20: dbgsCopyOut.aCh(8) = &H63: dbgsCopyOut.aCh(9) = &H6F: dbgsCopyOut.aCh(10) = &H70: dbgsCopyOut.aCh(11) = &H79
+dbgsCopyOut.aCh(12) = &H69: dbgsCopyOut.aCh(13) = &H6E: dbgsCopyOut.aCh(14) = &H67: dbgsCopyOut.aCh(15) = &H20: dbgsCopyOut.aCh(16) = &H6F: dbgsCopyOut.aCh(17) = &H75
+dbgsCopyOut.aCh(18) = &H74
+
+End Sub
+
+Private Sub InitUnicodeStrings()
+'\Device\TBHWldDrv
+strName.D(0) = &h5C: strName.D(1) = &h44: strName.D(2) = &h65: strName.D(3) = &h76: strName.D(4) = &h69: strName.D(5) = &h63: strName.D(6) = &h65
+strName.D(7) = &h5C: strName.D(8) = &h54: strName.D(9) = &h42: strName.D(10) = &h48: strName.D(11) = &h57: strName.D(12) = &h6C: strName.D(13) = &h64
+strName.D(14) = &h44: strName.D(15) = &h72: strName.D(16) = &h76
+RtlInitUnicodeString DeviceName, strName
+
+'\DosDevices\TBHWldDrv
+strLink.D(0) = &h5C: strLink.D(1) = &h44: strLink.D(2) = &h6F: strLink.D(3) = &h73: strLink.D(4) = &h44: strLink.D(5) = &h65: strLink.D(6) = &h76
+strLink.D(7) = &h69: strLink.D(8) = &h63: strLink.D(9) = &h65: strLink.D(10) = &h73: strLink.D(11) = &h5C: strLink.D(12) = &h54: strLink.D(13) = &h42
+strLink.D(14) = &h48: strLink.D(15) = &h57: strLink.D(16) = &h6C: strLink.D(17) = &h64: strLink.D(18) = &h44: strLink.D(19) = &h72: strLink.D(20) = &h76
+RtlInitUnicodeString DeviceLink, strLink
+End Sub
+End Module

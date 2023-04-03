@@ -1,0 +1,43 @@
+{
+	"configuration.inherits": "Defaults",
+	"project.buildPath": "${SourcePath}\\${Architecture}\\${ProjectName}.${FileExtension}",
+	"project.buildType": "Standard EXE",
+	"project.description": "HWLDriverController",
+	"project.dllRuntimeBinding": false,
+	"project.exportPathIsV2": true,
+	"project.id": "{85272AF9-9F96-40D2-829E-4A53C8E5CC6B}",
+	"project.name": "HWLDriverController",
+	"project.optionExplicit": true,
+	"project.references": [
+		{
+			"id": "{F50B82D0-DCAB-43FE-9631-11959D4A4728}",
+			"isCompilerPackage": true,
+			"licence": "MIT",
+			"name": "[COMPILER PACKAGE] WinNativeForms Package",
+			"path32": "/Packages/WindowsControlsPackage",
+			"path64": "/Packages/WindowsControlsPackage",
+			"publishedDate": "09-FEB-2022",
+			"publishedTime": "15:48:54",
+			"publisher": "TWINBASIC-COMPILER",
+			"symbolId": "WindowsControlsPackage",
+			"versionBuild": 0,
+			"versionMajor": 0,
+			"versionMinor": 0,
+			"versionRevision": 24
+		}
+	],
+	"project.startupObject": "Form1",
+	"project.versionAutoIncrement": "Revision",
+	"project.versionBuild": 1,
+	"project.versionFileDescription": "Controls the twinBASIC HelloWorldDriver",
+	"project.versionLegalCopyright": "©2022",
+	"project.versionMajor": 1,
+	"project.versionMinor": 0,
+	"project.versionProductName": "HelloWorldDriverController",
+	"project.versionRevision": 11,
+	"project.warnings": {
+		"errors": [],
+		"ignored": []
+	},
+	"runtime.useUnicodeStandardLibrary": true
+}

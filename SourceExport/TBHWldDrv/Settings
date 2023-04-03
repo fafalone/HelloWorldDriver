@@ -1,0 +1,28 @@
+{
+	"configuration.inherits": "Defaults",
+	"project.autoPrettify": true,
+	"project.buildPath": "${SourcePath}\\${Architecture}\\${ProjectName}.${FileExtension}",
+	"project.buildType": "Standard EXE",
+	"project.description": "TBHWldDrv",
+	"project.dllRuntimeBinding": false,
+	"project.exportPathIsV2": true,
+	"project.id": "{46CD6E01-8B39-402B-B73A-28522F135F00}",
+	"project.isNativeSubsystem": true,
+	"project.largeAddressAware": true,
+	"project.name": "TBHWldDrv",
+	"project.optionExplicit": true,
+	"project.overrideEntryPoint": "DriverEntry",
+	"project.references": [],
+	"project.versionAutoIncrement": "Revision",
+	"project.versionBuild": 1,
+	"project.versionFileDescription": "twinBASIC Driver Demo - HelloWorldDriver",
+	"project.versionMajor": 1,
+	"project.versionMinor": 0,
+	"project.versionProductName": "TBHWldDrv",
+	"project.versionRevision": 18,
+	"project.warnings": {
+		"errors": [],
+		"ignored": []
+	},
+	"runtime.useUnicodeStandardLibrary": true
+}
