@@ -5,7 +5,7 @@ twinBASIC Kernel mode driver demo
 
 This is a demonstration of using [twinBASIC](https://twinbasic.com/) (Current releases and community [on GitHub](https://github.com/twinbasic)) to create a kernel mode driver compatible with x64 versions of Windows. I became fascinated with the idea after The_trick figured out [how to make them in VB6](https://www.vbforums.com/showthread.php?788179-VB6-Kernel-mode-driver), and when I saw twinBASIC could compile VB6 code to 64bit... the prospect was fascinating, since VB6 was limited to x86 and there's no WOW64 for kernel mode. We could make drivers for the Windows 64bit OS everyone is running, and even easier with far more features since tB has no runtime... if twinBASIC supported a few features to replicate the hacks that made it possible in VB6. So I made a [feature request](https://github.com/twinbasic/twinbasic/issues/1013), and the awesome Wayne Phillips was interested. 
 
-For testing purposes, I first made a working VB6 version (included), and then a tB version with all the definitions updated to x64 and taking advantage of a feature tB has to put in-project API declares into , and a controller (written in tB) to load/unload the driver.
+For testing purposes, I first made a working VB6 version (included), and then a tB version with all the definitions updated to x64 and taking advantage of a feature tB has to put in-project API declares into the IAT without a typelib, and a controller (written in tB) to load/unload the driver.
 
 **Running the project**
 
