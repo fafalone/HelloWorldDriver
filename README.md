@@ -47,7 +47,7 @@ There are some limitations. You still can't use strings or arrays (besides 1D ar
 
 In the DriverEntry function we do 4 things: Initialize our string types, create the `DEVICE_OBJECT` that descibes our driver to the system, create a symbolic link that allows the driver to communicate with user mode apps via `CreateFile`, and set up the function table for the IRP major functions. For most of these, we just implement default handlers that pass on IRPs (I/O request packets) to the next driver in the stack. The one we're primarily interested in for this demo is `IRP_MJ_DEVICE_CONTROL`: If you've ever used the DeviceIoControl API, this is where those commands are going, to device drivers. 
 
-
+```vba
     Public Function DriverEntry(ByRef DriverObject As DRIVER_OBJECT, ByRef RegistryPath As UNICODE_STRING) As Long
     InitDebugStrings
     DbgPrint VarPtr(dbgsEntry)
@@ -78,11 +78,11 @@ In the DriverEntry function we do 4 things: Initialize our string types, create 
      
     DriverEntry = ntStatus
     End Function
-
+```
 We define a custom command for our project using the `CTL_CODE` macro, which can be implemented easily thanks to tB having << and >> bitshift operators. The command we're defining is used to send the driver a verification number to check to make sure everything is ok as input. The output is the `HelloWorldVersion` UDT, a custom structure we use for the driver to pass it's version data to us to test that everything is working and we've successfully created a driver that takes commands and exchanges data with user mode applications.
 
 In the driver controller, after starting the driver with the service APIs and connecting to it with `CreateFile`, the command is sent:
-
+```vba
     Dim tVer As HelloWorldVersion
     Dim lVerify As Long
     Dim cbRet As Long
@@ -90,11 +90,11 @@ In the driver controller, after starting the driver with the service APIs and co
     AppendLog "Sending IOCTL_HWRLD_VERSION to driver..."
     result = DeviceIoControl(hDev, IOCTL_HWRLD_VERSION, lVerify, 4&, tVer, LenB(tVer), cbRet, ByVal 0&)
     AppendLog "Result: ret=0x" & Hex$(result) & ",cbRead=" & cbRet & vbCrLf & "Version (Expecting 1.2.3.4)=" & tVer.Major & "." & tVer.Minor & "." & tVer.Build & "." & tVer.Revision
-
+```
 If we get the version numbers we expect, SUCCESS! Everything has worked.
 
 In the driver, we receive that command:
-
+```vba
     Public Function OnDeviceControl(ByRef DriverObject As DRIVER_OBJECT, ByRef pIrp As IRP) As Long
     DbgPrint VarPtr(dbgsDevIoEntry)
     Dim lpStack As LongPtr
@@ -139,17 +139,17 @@ In the driver, we receive that command:
             IoCompleteRequest pIrp, IO_NO_INCREMENT
             OnDeviceControl = ntStatus
             Exit Function
-            
+```            
 The current location on the stack has all the DeviceIoControl arguments from when we called that API, we check if everything is ok, if so, we copy the data to the i/o packet.
 
 The last thing we handle is the Unload function, where we delete the symbolic link and device object:
-
+```vba
     Public Sub OnUnload(DriverObject As DRIVER_OBJECT)
         If Device.Size = 0 Then Exit Sub
         IoDeleteSymbolicLink DeviceLink
         IoDeleteDevice ByVal DriverObject.DeviceObject
     End Sub
-
+```
 
 This project shows the use of the DbgPrint function so we can more easily debug our driver like a normal VB/tB project instead of the extraordinarily difficult WinDbg's kernel debugger. It's a CDecl function, but fortunately tB supports that natively so we don't have to worry about the workarounds VB requires for that. It has a `...` argument that maps to a ParamArray; but right now tB manages those behind the scenes with APIs, so can't use them here... but those are all optional, we can supply just the string, then use [DebugView](https://docs.microsoft.com/en-us/sysinternals/downloads/debugview) to see the output. Note that you must open DebugView (as administrator) after clicking load driver, or it won't attach properly. 
 
