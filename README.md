@@ -16,6 +16,8 @@ For testing purposes, I first made a working VB6 version (included), and then a 
 
 The tB version only needs to be built. The required settings applied for making kernel mode drivers were creating a standard exe, removing the current references, enabling the settings Project: Native subsystem->YES, Project: Override entry point->DriverEntry, Project: Runtime binding of DLL declares->NO.
 
+**NOTE:** In newer tB versions, you also need to set Strip relocation symbols to NO, and Enable Address Space Layout Randomization to YES. Also starting in Beta 786, no project with an entry point override can be built. Use 785 to build, or check the current version has since fixed this.
+
 If you want to build the VB6 version to compare:
 The VBP includes the undocumented link switches and enables the optimizations needed, so just needs to be opened and compiled.
 After compiling the .sys, use The_trick's Patcher project (included) to strip the msvbvm60.dll dependency from the .sys.
