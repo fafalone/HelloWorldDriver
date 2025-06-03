@@ -1,4 +1,4 @@
-i**See also:** I've now also posted an example of a filesystem minifilter driver made in tB that blocks accessing files or running programs by name: https://github.com/fafalone/FsMinifilter
+**See also:** I've now also posted an example of a filesystem minifilter driver made in tB that blocks accessing files or running programs by name: https://github.com/fafalone/FsMinifilter
 
 
 # HelloWorldDriver
